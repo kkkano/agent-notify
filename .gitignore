@@ -1,0 +1,11 @@
+# 本机密钥配置，包含飞书 webhook
+config.json
+
+# 运行态：队列、日志、token 缓存、Codex 原始 notify 记录
+state/
+
+# 安装器生成的配置备份
+*.agent-notify*.bak
+
+# 临时测试目录
+.test-home*/

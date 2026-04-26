@@ -1,0 +1,35 @@
+{
+  "enabled": true,
+  "agents": {
+    "claude": true,
+    "codex": true
+  },
+  "events": {
+    "claude": {
+      "Stop": true,
+      "Notification": true,
+      "TaskCompleted": true
+    },
+    "codex": {
+      "notify": true
+    }
+  },
+  "privacy": {
+    "includePayloadPreview": false,
+    "maxPreviewChars": 160
+  },
+  "message": {
+    "prefix": "[Agent]",
+    "timezone": "Asia/Shanghai"
+  },
+  "feishu": {
+    "enabled": true,
+    "mode": "webhook",
+    "webhookUrl": "",
+    "webhookSecret": "",
+    "appId": "",
+    "appSecret": "",
+    "receiverId": "",
+    "receiverType": "open_id"
+  }
+}
