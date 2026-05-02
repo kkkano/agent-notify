@@ -8,6 +8,7 @@ $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent $PSCommandPath
 $StateDir = Join-Path $Root "state"
 $OriginalCodexNotifyPath = Join-Path $StateDir "codex-notify-original.json"
+$OriginalCodexHooksPath = Join-Path $StateDir "codex-hooks-original.json"
 
 function Write-Step($Message) {
   Write-Host "[agent-notify] $Message"
@@ -30,6 +31,31 @@ function Save-Json($Path, $Object) {
   }
 }
 
+function Remove-AgentNotifyCodexHookBlock($Raw) {
+  [regex]::Replace($Raw, '(?ms)\r?\n?# BEGIN agent-notify codex hooks\r?\n.*?\r?\n# END agent-notify codex hooks\r?\n?', "`r`n")
+}
+
+function Restore-CodexHooksFeature($Raw) {
+  if (-not (Test-Path -LiteralPath $OriginalCodexHooksPath)) { return $Raw }
+
+  $original = Get-Content -LiteralPath $OriginalCodexHooksPath -Raw | ConvertFrom-Json
+  if ($original.codexHooksLine) {
+    if ($Raw -match '(?m)^\s*codex_hooks\s*=.*$') {
+      return [regex]::Replace($Raw, '(?m)^\s*codex_hooks\s*=.*$', [string]$original.codexHooksLine, 1)
+    }
+
+    $featureMatch = [regex]::Match($Raw, '(?ms)^\[features\]\s*.*?(?=^\[|\z)')
+    if ($featureMatch.Success) {
+      $block = $featureMatch.Value.TrimEnd() + "`r`n" + [string]$original.codexHooksLine + "`r`n"
+      return $Raw.Substring(0, $featureMatch.Index) + $block + $Raw.Substring($featureMatch.Index + $featureMatch.Length)
+    }
+
+    return $Raw.TrimEnd() + "`r`n`r`n[features]`r`n" + [string]$original.codexHooksLine + "`r`n"
+  }
+
+  return [regex]::Replace($Raw, '(?m)^\s*codex_hooks\s*=.*\r?\n?', '', 1)
+}
+
 function Remove-ClaudeHooks {
   $settingsPath = Join-Path $env:USERPROFILE ".claude\settings.json"
   if (-not (Test-Path -LiteralPath $settingsPath)) { return }
@@ -38,7 +64,7 @@ function Remove-ClaudeHooks {
   $settings = Get-Content -LiteralPath $settingsPath -Raw | ConvertFrom-Json
   if (-not $settings.PSObject.Properties["hooks"]) { return }
 
-  foreach ($eventName in @("Stop", "Notification", "TaskCompleted")) {
+  foreach ($eventName in @("Stop", "Notification", "TaskCompleted", "SubagentStop")) {
     if (-not $settings.hooks.PSObject.Properties[$eventName]) { continue }
     $kept = @()
     foreach ($entry in @($settings.hooks.$eventName)) {
@@ -60,26 +86,36 @@ function Remove-ClaudeHooks {
 function Restore-CodexNotify {
   $configPath = Join-Path $env:USERPROFILE ".codex\config.toml"
   if (-not (Test-Path -LiteralPath $configPath)) { return }
-  if (-not (Test-Path -LiteralPath $OriginalCodexNotifyPath)) {
-    Write-Step "Original Codex notify record not found, skip restore"
-    return
-  }
 
   Backup-File $configPath
   $raw = Get-Content -LiteralPath $configPath -Raw
-  $original = Get-Content -LiteralPath $OriginalCodexNotifyPath -Raw | ConvertFrom-Json
-  $line = $original.originalLine
-  if (-not $line) { $line = "notify = " + (($original.argv | ConvertTo-Json -Compress)) }
+  $updated = Restore-CodexHooksFeature (Remove-AgentNotifyCodexHookBlock $raw)
 
-  if ($raw -match '(?m)^\s*notify\s*=\s*\[.*agent-notify.*notify\.mjs.*\]\s*$') {
-    $updated = [regex]::Replace($raw, '(?m)^\s*notify\s*=\s*\[.*agent-notify.*notify\.mjs.*\]\s*$', $line, 1)
-    if (-not $DryRun) {
-      [System.IO.File]::WriteAllText($configPath, $updated, [System.Text.UTF8Encoding]::new($false))
+  if (Test-Path -LiteralPath $OriginalCodexNotifyPath) {
+    $original = Get-Content -LiteralPath $OriginalCodexNotifyPath -Raw | ConvertFrom-Json
+    $line = $original.originalLine
+    if (-not $line) { $line = "notify = " + (($original.argv | ConvertTo-Json -Compress)) }
+
+    if ($updated -match '(?m)^\s*notify\s*=\s*\[.*agent-notify.*notify\.mjs.*\]\s*$') {
+      $updated = [regex]::Replace($updated, '(?m)^\s*notify\s*=\s*\[.*agent-notify.*notify\.mjs.*\]\s*$', $line, 1)
+      if (-not $DryRun) {
+        [System.IO.File]::WriteAllText($configPath, $updated, [System.Text.UTF8Encoding]::new($false))
+      }
+      Write-Step "Codex notify and hooks restored"
+    } else {
+      if (-not $DryRun) {
+        [System.IO.File]::WriteAllText($configPath, $updated, [System.Text.UTF8Encoding]::new($false))
+      }
+      Write-Step "Codex notify does not point to agent-notify, hooks restored only"
     }
-    Write-Step "Codex notify restored"
-  } else {
-    Write-Step "Codex notify does not point to agent-notify, skip"
+    return
   }
+
+  $updated = [regex]::Replace($updated, '(?m)^\s*notify\s*=\s*\[.*agent-notify.*notify\.mjs.*\]\s*\r?\n?', '', 1)
+  if (-not $DryRun) {
+    [System.IO.File]::WriteAllText($configPath, $updated, [System.Text.UTF8Encoding]::new($false))
+  }
+  Write-Step "Original Codex notify record not found, agent-notify hooks removed"
 }
 
 if (-not $SkipClaude) {

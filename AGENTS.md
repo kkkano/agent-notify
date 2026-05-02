@@ -11,7 +11,7 @@ D:\agent-notify\
 |-- config.example.json  # 示例配置与默认开关
 |-- config.json          # 本机配置，安装后生成
 |-- images\              # README 截图，提交前必须确认已打码
-|-- state\               # 运行态：队列、token 缓存、日志、Codex 原始 notify
+|-- state\               # 运行态：队列、token 缓存、日志、Codex 原始配置记录
 `-- README.md            # 使用说明
 ```
 
@@ -19,11 +19,11 @@ D:\agent-notify\
 
 `notify.mjs` 是唯一运行时入口。它不启动 HTTP 服务，不监听端口，只在 hook 触发时运行一次。
 
-`install.ps1` 只负责配置落盘：Claude 走 `settings.json` hooks，Codex 走 `config.toml` 的 `notify` fanout。安装器必须备份既有配置。
+`install.ps1` 只负责配置落盘：Claude 走 `settings.json` hooks，Codex 走 `config.toml` 的 hooks 和 `notify` fanout。安装器必须备份既有配置。
 
 `uninstall.ps1` 只恢复安装器造成的改动。不得删除用户自己的 Claude/Codex 其他配置。
 
-`state/` 是可丢弃运行态，但 `state/codex-notify-original.json` 是 Codex 恢复依据，卸载前不要删除。
+`state/` 是可丢弃运行态，但 `state/codex-notify-original.json` 和 `state/codex-hooks-original.json` 是 Codex 恢复依据，卸载前不要删除。
 
 `images/` 只保存 README 截图。截图若含 webhook、路径、用户名等敏感信息，必须先打码再提交。
 
@@ -32,10 +32,11 @@ D:\agent-notify\
 ## 依赖关系
 
 ```text
-Claude Code hooks --> notify.mjs --> Feishu
-Codex notify -----> notify.mjs --> Feishu
-                         |
-                         `--> original Codex notify
+Claude Code hooks -------> notify.mjs --> Feishu
+Codex hooks -------------> notify.mjs --> Feishu
+Codex notify fanout -----> notify.mjs
+                              |
+                              `--> original Codex notify
 ```
 
 ## 设计原则
@@ -51,3 +52,4 @@ Codex notify -----> notify.mjs --> Feishu
 - 2026-04-26: 创建轻量通知器，首版支持飞书 webhook 与飞书自建应用两种模式。
 - 2026-04-26: 重写 README 为傻瓜式安装说明，并加入 gitignore 防止 webhook 泄露。
 - 2026-04-26: 将已打码截图纳入 README，辅助新用户按图配置。
+- 2026-05-03: 通知归一化增加完成/需处理分类，默认屏蔽阶段完成和子任务完成提醒。

@@ -26,11 +26,21 @@ const defaultConfig = {
     claude: {
       Stop: true,
       Notification: true,
-      TaskCompleted: true,
+      TaskCompleted: false,
+      SubagentStop: false,
     },
     codex: {
       notify: true,
+      Stop: true,
+      PermissionRequest: true,
     },
+  },
+  notifications: {
+    completion: true,
+    actionRequired: true,
+    stage: false,
+    subagent: false,
+    unknown: false,
   },
   privacy: {
     includePayloadPreview: false,
@@ -210,10 +220,93 @@ function inferProjectName(cwd) {
   return cwd.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || cwd;
 }
 
+function eventKey(value) {
+  return String(value || '').trim().toLowerCase();
+}
+
+function stringField(...values) {
+  return values
+    .filter((value) => typeof value === 'string' && value.trim())
+    .map((value) => value.trim())
+    .join(' ');
+}
+
+function hasSubagentMarker({ event, payload, context }) {
+  const name = eventKey(event);
+  if (name === 'subagentstop' || name === 'sub_agent_stop') return true;
+  if (payload.subagent === true || payload.is_subagent === true || context.subagent === true) {
+    return true;
+  }
+
+  const agentType = eventKey(firstString(
+    payload.agent_type,
+    payload.agentType,
+    payload.agent_kind,
+    context.agent_type,
+    context.agentType,
+    context.agent_kind,
+  ));
+  if (!agentType) return false;
+  return !['main', 'root', 'primary'].includes(agentType);
+}
+
+function classifyEvent({ agent, event, payload, context, message }) {
+  const name = eventKey(event);
+  const toolInput = payload.tool_input && typeof payload.tool_input === 'object' ? payload.tool_input : {};
+  const sourceText = stringField(
+    event,
+    payload.hook_event_name,
+    payload.type,
+    payload.event,
+    payload.kind,
+    payload.status,
+    payload.reason,
+    payload.tool_name,
+    toolInput.description,
+    payload.notification,
+    payload.message,
+    context.type,
+    context.status,
+    message,
+  ).toLowerCase();
+
+  if (hasSubagentMarker({ event, payload, context })) {
+    return { kind: 'subagent', label: '子任务完成', action: 'ignore' };
+  }
+
+  if (['taskcompleted', 'task_completed', 'subtaskcompleted', 'subtask_completed'].includes(name)) {
+    return { kind: 'stage', label: '阶段完成', action: 'ignore' };
+  }
+
+  if (
+    name === 'notification' ||
+    name === 'permissionrequest' ||
+    name === 'permission_request' ||
+    /\b(approval|permission|confirm|input|waiting|blocked|requires[_ -]?action)\b/i.test(sourceText) ||
+    /(需要.*(权限|确认|输入|处理)|等待.*(输入|确认|处理))/.test(sourceText)
+  ) {
+    return { kind: 'actionRequired', label: '需要处理', action: 'send' };
+  }
+
+  if (
+    ['stop', 'sessionend', 'session_end', 'completed', 'complete', 'done'].includes(name) ||
+    /\b(turn[_ -]?complete|session[_ -]?end|final)\b/i.test(sourceText)
+  ) {
+    return { kind: 'completion', label: '任务完成', action: 'send' };
+  }
+
+  if (agent === 'codex' && name === 'notify') {
+    return { kind: 'unknown', label: 'Codex 旧通知', action: 'ignore' };
+  }
+
+  return { kind: 'unknown', label: '未分类通知', action: 'ignore' };
+}
+
 function normalizeEvent({ agent, event, payload, cfg }) {
   const context = payload.context && typeof payload.context === 'object' ? payload.context : {};
+  const toolInput = payload.tool_input && typeof payload.tool_input === 'object' ? payload.tool_input : {};
   const cwd = firstString(payload.cwd, payload.project_path, context.project_path, process.cwd());
-  const hookEvent = firstString(event, payload.hook_event_name, payload.event, payload.type, 'notify');
+  const hookEvent = firstString(payload.hook_event_name, payload.event, payload.type, event, 'notify');
   const sessionId = firstString(
     payload.session_id,
     payload['session-id'],
@@ -227,15 +320,19 @@ function normalizeEvent({ agent, event, payload, cfg }) {
     payload['last-assistant-message'],
     payload.last_assistant_message,
     payload.output_preview,
+    toolInput.description,
     context.output_preview,
     context.status,
   );
+  const classification = classifyEvent({ agent, event: hookEvent, payload, context, message });
 
   return {
     id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
     time: new Date().toISOString(),
     agent,
     event: hookEvent,
+    kind: classification.kind,
+    kindLabel: classification.label,
     cwd,
     project: firstString(payload.project_name, context.project_name, inferProjectName(cwd)),
     sessionId,
@@ -249,6 +346,8 @@ function normalizeEvent({ agent, event, payload, cfg }) {
 function isEventEnabled(cfg, item) {
   if (!cfg.enabled) return false;
   if (!cfg.agents[item.agent]) return false;
+  const notificationKinds = cfg.notifications || {};
+  if (notificationKinds[item.kind] !== true) return false;
   const agentEvents = cfg.events[item.agent] || {};
   if (agentEvents[item.event] === false) return false;
   if (agentEvents[item.event] === true) return true;
@@ -271,15 +370,24 @@ function formatLocalTime(iso, timezone) {
   }
 }
 
+function formatAgentLabel(agent) {
+  if (agent === 'claude') return 'Claude Code';
+  if (agent === 'codex') return 'Codex';
+  return agent || 'Agent';
+}
+
 function formatMessage(cfg, item) {
-  const label = item.agent === 'claude' ? 'Claude Code' : 'Codex';
+  const label = formatAgentLabel(item.agent);
+  const title = item.kind === 'actionRequired' ? '需要处理' : '任务完成';
+  const detailLabel = item.kind === 'actionRequired' ? '提示' : '摘要';
   const lines = [
-    `${cfg.message.prefix || '[Agent]'} ${label} ${item.event} 已结束`,
+    `${cfg.message.prefix || '[Agent]'} ${title} | ${label}`,
+    `类型: ${item.kindLabel || title}`,
     `项目: ${item.project || '-'}`,
     `目录: ${item.cwd || '-'}`,
     `时间: ${formatLocalTime(item.time, cfg.message.timezone)}`,
   ];
-  if (item.message) lines.push(`摘要: ${item.message}`);
+  if (item.message) lines.push(`${detailLabel}: ${item.message}`);
   return lines.join('\n');
 }
 
@@ -549,7 +657,7 @@ async function emitCliCommand() {
 
 async function testCommand() {
   const agent = getArg('agent', 'manual');
-  const event = getArg('event', 'test');
+  const event = getArg('event', 'Stop');
   const cfg = await loadConfig();
   const item = normalizeEvent({
     agent,

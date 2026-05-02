@@ -8,11 +8,21 @@
     "claude": {
       "Stop": true,
       "Notification": true,
-      "TaskCompleted": true
+      "TaskCompleted": false,
+      "SubagentStop": false
     },
     "codex": {
-      "notify": true
+      "notify": true,
+      "Stop": true,
+      "PermissionRequest": true
     }
+  },
+  "notifications": {
+    "completion": true,
+    "actionRequired": true,
+    "stage": false,
+    "subagent": false,
+    "unknown": false
   },
   "privacy": {
     "includePayloadPreview": false,

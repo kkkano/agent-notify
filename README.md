@@ -84,9 +84,46 @@ cd D:\agent-notify
 安装器会做这些事：
 
 - 写入 `D:\agent-notify\config.json`
-- 给 Claude Code 添加 `Stop` / `Notification` / `TaskCompleted` hooks
-- 包装 Codex 的 `notify = [...]`
-- 保留原来的 Codex notify，并在发送飞书后继续调用它
+- 给 Claude Code 添加 `Stop` / `Notification` hooks
+- 给 Codex 开启 `codex_hooks`，添加 `Stop` / `PermissionRequest` hooks
+- 包装 Codex 的 `notify = [...]` 作为兼容链路
+- 保留原来的 Codex notify，并在兼容链路触发后继续调用它
+
+默认只发送两类消息：
+
+- `任务完成`：主任务结束。
+- `需要处理`：需要权限、确认或输入。
+
+阶段完成、子任务完成和无法分类的通知默认不发飞书。
+
+### 提醒策略
+
+飞书消息标题会直接区分提醒类型：
+
+```text
+[Agent] 任务完成 | Codex
+[Agent] 需要处理 | Claude Code
+```
+
+默认规则：
+
+- Claude Code 的 `Stop` 会发送 `任务完成`。
+- Claude Code 的 `Notification` 会发送 `需要处理`。
+- Codex 的 `Stop` 会发送 `任务完成`。
+- Codex 的 `PermissionRequest` 会发送 `需要处理`。
+- `TaskCompleted`、`SubagentStop`、阶段完成和子任务完成默认忽略。
+
+如果需要临时关闭某一类提醒，编辑 `D:\agent-notify\config.json`：
+
+```json
+"notifications": {
+  "completion": true,
+  "actionRequired": true,
+  "stage": false,
+  "subagent": false,
+  "unknown": false
+}
+```
 
 ## 测试
 
